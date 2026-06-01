@@ -27,8 +27,71 @@ async function run(fn: () => Promise<unknown>) {
   }
 }
 
+// Default metrics kept when a report is returned in compact form. The raw
+// Appfigures rows carry ~45 fields each, which overflows context on any
+// multi-day/multi-country pull.
+const DEFAULT_METRICS = [
+  "downloads",
+  "re_downloads",
+  "net_downloads",
+  "updates",
+  "uninstalls",
+  "returns",
+  "revenue",
+  "subscription_purchases",
+];
+
+/**
+ * Recursively walk a report response and trim each metric leaf (any object
+ * carrying a "downloads" or "revenue" key) down to the requested metrics.
+ * Grouping levels (by date/country/etc.) are preserved as-is.
+ */
+function trimReport(node: unknown, keep: string[]): unknown {
+  if (Array.isArray(node)) return node.map((n) => trimReport(n, keep));
+  if (node && typeof node === "object") {
+    const obj = node as Record<string, unknown>;
+    const isLeaf = "downloads" in obj || "revenue" in obj;
+    if (isLeaf) {
+      const out: Record<string, unknown> = {};
+      for (const k of keep) if (k in obj) out[k] = obj[k];
+      return out;
+    }
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(obj)) out[k] = trimReport(v, keep);
+    return out;
+  }
+  return node;
+}
+
+/**
+ * Call a report endpoint and optionally trim the response. `compact`/`metrics`
+ * are MCP-only controls and are stripped before the request goes to Appfigures.
+ */
+async function runReport(path: string, args: Record<string, unknown>) {
+  const { compact = true, metrics, ...query } = args;
+  const data = await afRequest(path, query as Query);
+  if (!compact) return data;
+  const keep =
+    typeof metrics === "string" && metrics.trim()
+      ? metrics.split(",").map((m) => m.trim()).filter(Boolean)
+      : DEFAULT_METRICS;
+  return trimReport(data, keep);
+}
+
 // Shared param shapes for the financial report endpoints (sales/revenue).
 const reportShape = {
+  compact: z
+    .boolean()
+    .optional()
+    .describe(
+      "Trim each row to key metrics (default true) to stay context-friendly. Set false for all ~45 raw fields.",
+    ),
+  metrics: z
+    .string()
+    .optional()
+    .describe(
+      "Comma-separated metric names to keep (overrides the compact default set), e.g. 'downloads,revenue'.",
+    ),
   group_by: z
     .string()
     .optional()
@@ -96,10 +159,45 @@ export function createServer(): McpServer {
     {
       title: "List my products",
       description:
-        "List the products (apps) connected to your Appfigures account, with their IDs, names, and stores.",
-      inputSchema: {},
+        "List the products (apps) connected to your Appfigures account, with their IDs, names, and stores. " +
+        "Compact by default (id/name/store/vendor/sku/active/type) to stay context-friendly; set compact=false for full metadata.",
+      inputSchema: {
+        compact: z
+          .boolean()
+          .optional()
+          .describe(
+            "Return only essential fields per product (default true). Set false for the full raw response.",
+          ),
+        filter: z
+          .string()
+          .optional()
+          .describe("Case-insensitive substring to match against product name."),
+      },
     },
-    () => run(() => afRequest("/products/mine")),
+    ({ compact = true, filter }) =>
+      run(async () => {
+        const data = await afRequest("/products/mine");
+        // The API returns an object keyed by product id. Optionally filter by
+        // name and trim to essential fields so the result fits in context.
+        let products = Object.values(data as Record<string, Record<string, unknown>>);
+        if (filter) {
+          const needle = filter.toLowerCase();
+          products = products.filter((p) =>
+            String(p.name ?? "").toLowerCase().includes(needle),
+          );
+        }
+        if (!compact) return filter ? products : data;
+        return products.map((p) => ({
+          id: p.id,
+          name: p.name,
+          store: p.store,
+          vendor_identifier: p.vendor_identifier,
+          sku: p.sku,
+          active: p.active,
+          type: p.type,
+          parent_id: p.parent_id,
+        }));
+      }),
   );
 
   // 3. Sales report (downloads + revenue).
@@ -111,7 +209,7 @@ export function createServer(): McpServer {
         "Sales report: downloads, updates, revenue and returns, optionally pivoted and filtered by date/product/country.",
       inputSchema: reportShape,
     },
-    (args) => run(() => afRequest("/reports/sales", args as Query)),
+    (args) => run(() => runReport("/reports/sales", args)),
   );
 
   // 4. Revenue report.
@@ -123,7 +221,7 @@ export function createServer(): McpServer {
         "Revenue report with the same filtering/pivoting options as the sales report.",
       inputSchema: reportShape,
     },
-    (args) => run(() => afRequest("/reports/revenue", args as Query)),
+    (args) => run(() => runReport("/reports/revenue", args)),
   );
 
   // 5. Reviews.
