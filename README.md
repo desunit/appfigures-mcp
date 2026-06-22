@@ -31,6 +31,7 @@ Appfigures for you.
 | `products_list_mine` | `GET /products/mine` | List the products (apps) connected to your account, with IDs and stores. |
 | `reports_sales` | `GET /reports/sales` | Downloads, updates, revenue and returns — filterable and pivotable. |
 | `reports_revenue` | `GET /reports/revenue` | Revenue report with the same filtering/pivoting options. |
+| `reports_subscriptions` | `GET /reports/subscriptions` | Trials, trial→paid conversions, active/new/cancelled subs, churn, MRR and revenue — the only report that splits subscription value **by country**. |
 | `reviews_list` | `GET /reviews` | User reviews, filterable by product, rating, language and date range. |
 | `products_search` | `GET /products/search/{term}` | Search the stores for apps. *Requires a Partner API tier — see [Notes](#notes).* |
 
@@ -96,11 +97,12 @@ Once connected, prompt your assistant naturally:
 - *"List my apps and their product IDs."* → `products_list_mine`
 - *"What were my sales in May 2026?"* → `reports_sales` with date range
 - *"Revenue by product for the last 30 days, monthly."* → `reports_revenue` with `group_by=products`
+- *"New trials and subscription revenue by country last month."* → `reports_subscriptions` with `group_by=countries`
 - *"Show my 5 most recent reviews."* → `reviews_list` with `count=5`
 
 ### Report parameters
 
-`reports_sales` / `reports_revenue` accept:
+`reports_sales` / `reports_revenue` / `reports_subscriptions` accept:
 
 | Param | Values |
 |-------|--------|
@@ -110,6 +112,12 @@ Once connected, prompt your assistant naturally:
 | `products` | comma-separated product IDs |
 | `countries` | comma-separated ISO country codes |
 | `dataset` | `financial` (Apple/Google breakdown; requires monthly granularity) |
+
+> **Subscriptions are keyed by IAP/subscription product IDs, not app IDs.** Filtering
+> `reports_subscriptions` by an app's product ID returns `{}` — pass the subscription product IDs
+> instead (resolve them via `GET /products/<id>` → `parent_id`, which points back to the app). The
+> sales report's per-country `revenue` is downloads-only for free-with-IAP apps, so use
+> `reports_subscriptions` for per-country subscription value.
 
 ## Development
 

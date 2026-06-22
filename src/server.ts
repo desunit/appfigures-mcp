@@ -41,16 +41,40 @@ const DEFAULT_METRICS = [
   "subscription_purchases",
 ];
 
+// Compact default for the subscriptions report (/reports/subscriptions). The
+// raw rows carry ~40 subscription fields; these are the load-bearing
+// acquisition / conversion / value metrics. The country/product grouping key
+// already identifies each row, so the in-leaf `iso`/`country` fields are
+// dropped by the trim.
+const SUBSCRIPTION_METRICS = [
+  "new_trials",
+  "trial_conversions",
+  "trial_conversion_rate",
+  "new_subscriptions",
+  "active_subscriptions",
+  "cancelled_subscriptions",
+  "churn",
+  "mrr",
+  "actual_revenue",
+  "gross_revenue",
+];
+
 /**
- * Recursively walk a report response and trim each metric leaf (any object
- * carrying a "downloads" or "revenue" key) down to the requested metrics.
- * Grouping levels (by date/country/etc.) are preserved as-is.
+ * Recursively walk a report response and trim each metric leaf down to the
+ * requested metrics. A leaf is any object carrying a recognizable metric key
+ * ("downloads"/"revenue" for sales/revenue reports, "active_subscriptions"/
+ * "mrr" for the subscriptions report). Grouping levels (by date/country/etc.)
+ * are preserved as-is.
  */
 function trimReport(node: unknown, keep: string[]): unknown {
   if (Array.isArray(node)) return node.map((n) => trimReport(n, keep));
   if (node && typeof node === "object") {
     const obj = node as Record<string, unknown>;
-    const isLeaf = "downloads" in obj || "revenue" in obj;
+    const isLeaf =
+      "downloads" in obj ||
+      "revenue" in obj ||
+      "active_subscriptions" in obj ||
+      "mrr" in obj;
     if (isLeaf) {
       const out: Record<string, unknown> = {};
       for (const k of keep) if (k in obj) out[k] = obj[k];
@@ -67,14 +91,18 @@ function trimReport(node: unknown, keep: string[]): unknown {
  * Call a report endpoint and optionally trim the response. `compact`/`metrics`
  * are MCP-only controls and are stripped before the request goes to Appfigures.
  */
-async function runReport(path: string, args: Record<string, unknown>) {
+async function runReport(
+  path: string,
+  args: Record<string, unknown>,
+  defaultMetrics: string[] = DEFAULT_METRICS,
+) {
   const { compact = true, metrics, ...query } = args;
   const data = await afRequest(path, query as Query);
   if (!compact) return data;
   const keep =
     typeof metrics === "string" && metrics.trim()
       ? metrics.split(",").map((m) => m.trim()).filter(Boolean)
-      : DEFAULT_METRICS;
+      : defaultMetrics;
   return trimReport(data, keep);
 }
 
@@ -222,6 +250,24 @@ export function createServer(): McpServer {
       inputSchema: reportShape,
     },
     (args) => run(() => runReport("/reports/revenue", args)),
+  );
+
+  // 4b. Subscriptions report (trials, conversions, active subs, MRR, revenue).
+  server.registerTool(
+    "reports_subscriptions",
+    {
+      title: "Subscriptions report",
+      description:
+        "Subscription report: new trials, trial→paid conversions, new/active/cancelled subscriptions, " +
+        "churn, MRR and actual/gross revenue — pivotable by country/product/date and filterable by product. " +
+        "This is the ONLY source that splits subscription revenue and trial conversion BY COUNTRY (the sales " +
+        "report's per-country revenue is downloads-only for free-with-IAP apps). " +
+        "NOTE: subscriptions are keyed by IAP/subscription product IDs, not app IDs — filter `products` by the " +
+        "subscription product (e.g. Piano Companion iOS = 280716076664 + 338505722861, both children of app 292912671), " +
+        "not the app id, or you get an empty result.",
+      inputSchema: reportShape,
+    },
+    (args) => run(() => runReport("/reports/subscriptions", args, SUBSCRIPTION_METRICS)),
   );
 
   // 5. Reviews.

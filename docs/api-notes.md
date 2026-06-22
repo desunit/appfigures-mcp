@@ -32,10 +32,22 @@ Without `group_by` the response is aggregate totals; with it, results nest by pi
 Fields include downloads, revenue, returns, updates; financial adds `iap_revenue`,
 `subscription_revenue`, `business_revenue`.
 
-### GET `/reviews`
-User reviews. → tool `reviews_list`. Params: `products`, `count`, `page`, `lang`
-(translation target), `start`, `end`, `stars` (1-5), `sort` (date \| stars).
+### GET `/reports/subscriptions`
+Subscription report (→ tool `reports_subscriptions`). Same pivot/filter params as the
+financial reports (`group_by`, `start_date`/`end_date`, `granularity`, `products`,
+`countries`). Per-row fields include `new_trials`, `trial_conversions`,
+`trial_conversion_rate`, `new_subscriptions`, `active_subscriptions`,
+`cancelled_subscriptions`, `churn`, `mrr`, `actual_revenue`, `gross_revenue`.
+
+This is the **only** report that splits subscription value **by country** — the sales
+report's per-country `revenue` is downloads-only for free-with-IAP apps (Apple's sales
+feed attributes only paid-app proceeds per country).
+
+**Gotcha — keyed by IAP/subscription product IDs, not app IDs.** Filtering `products` by
+an app's product ID returns `{}`. Pass the subscription product IDs instead; resolve them
+via `GET /products/<subId>` → `parent_id` (which points back to the app). A grouped
+`group_by=product` pull lists every subscription product with its parent `product` object.
 
 ## Other endpoints (not yet wrapped)
-`/reports/subscriptions`, `/reports/ads`, `/reports/adspend`, `/reports/ratings`,
+`/reports/ads`, `/reports/adspend`, `/reports/ratings`,
 `/ranks`, `/aso`, `/featured`, `/events`, `/users`, `/external_accounts`.
